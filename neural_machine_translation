@@ -1,0 +1,207 @@
+import re
+import keras
+from keras.models import Model 
+from keras.layers import Input, LSTM, Dense, Embedding , Dropout, RepeatVector
+import numpy as np          
+from sklearn.model_selection import train_test_split
+import string
+batch_size = 128 #128 batch size for training
+epochs = 200  # number of epochs to train for
+latent_dim = 64  # latent dimensionality of the encoding space
+from google.colab import drive
+drive.mount('/content/gdrive')
+with open("/content/gdrive/MyDrive/ara.txt", encoding="utf8") as f:
+  en2ar = f.readlines()
+print(en2ar)
+N = len(en2ar)
+arabic_diacritics = re.compile("""  ّ |  َ |  ً |  ُ |  ٌ |  ِ |  ٍ |  ْ | ـ |\u200d |\u200f """, re.VERBOSE)
+
+def remove_diacritics(text):
+    text = re.sub(arabic_diacritics, '', text)
+    return text 
+punctuation = re.compile(""" ! | ( | ) | \ | - | [ | ] | { | } | ; | : | ' | \" | \ | , | < | > | . | / | ? | @ | # | $ | % | ^ | & | *  """)
+def remove_punctuation(text):
+    text = re.sub(punctuation, ' ', text)
+    return text 
+def preprocess_sentence(w):
+    w = w.lower().strip()
+    w = remove_diacritics(w)
+    w = remove_punctuation(w)
+    #w = re.sub(r"[!()\-[]{};:'\"\\, <>./?@#$%^&*_]",r" ",w)
+    # creating a space between a word and the punctuation following it
+    #w = re.sub(r"([?.!,¿])", r" \1 ", w)
+    w = re.sub(r'[" "]+ ', " ", w)
+    w = re.sub("[٩٨٧٦٥٤٣٢١٠0123456789]",r"", w)
+    return w
+input_texts = []
+target_texts = []
+all_english_words = []
+all_arabic_words = []
+num_samples = 13
+for l in en2ar[:min(N,num_samples)]:
+  input_text = preprocess_sentence(l.split('\t')[0])
+  target_text = preprocess_sentence(l.split('\t')[1])
+  target_text = "STAR " + target_text + " END"
+
+  input_texts.append(input_text)
+  target_texts.append(target_text)
+  for word in input_text.split():
+    if word not in all_english_words:
+      all_english_words.append(word)
+  for word in target_text.split():
+    if word not in all_arabic_words:
+      all_arabic_words.append(word)
+
+print(all_arabic_words)
+print(sorted(all_arabic_words))
+print(all_arabic_words)
+all_english_words = sorted(list(all_english_words))
+print(all_english_words)
+all_arabic_words = sorted(list(all_arabic_words))
+print(all_arabic_words)
+print(all_arabic_words[2])
+num_encoder_tokens = len(all_english_words)
+num_decoder_tokens = len(all_arabic_words)
+print('num_encoder_tokens : ',num_encoder_tokens)
+print('num_decoder_tokens : ',num_decoder_tokens)
+print("_________________________________________________________________________")
+max_encoder_seq_length = max([len(txt.split()) for txt in input_texts])
+max_decoder_seq_length = max([len(txt.split()) for txt in target_texts])
+print('max_encoder_seq_length : ',max_encoder_seq_length)
+print('max_decoder_seq_length : ',max_decoder_seq_length)
+print("_________________________________________________________________________")
+import numpy as np
+encoder_input_data = np.zeros(
+  (len(input_texts), max_encoder_seq_length, num_encoder_tokens),
+  dtype='float32')
+decoder_input_data = np.zeros(
+  (len(input_texts), max_decoder_seq_length, num_decoder_tokens),
+  dtype='float32')
+decoder_target_data = np.zeros(
+  (len(input_texts), max_decoder_seq_length, num_decoder_tokens),
+  dtype='float32')
+print(encoder_input_data.shape)
+print(decoder_input_data.shape)
+print(decoder_target_data.shape)
+def giveWord(t,X):
+  for i,j in enumerate(t) :
+    if X==j:
+      return(j)
+def giveValues(t,X):
+  for i,j in enumerate(t) :
+    if X==j: 
+      return(i)
+
+#print(list(enumerate(target_texts)))
+print(list(enumerate(zip(input_texts, target_texts))))
+
+for i, (input, target) in enumerate(zip(input_texts, target_texts)): 
+  print(list(enumerate(input.split())))
+  for t,word in enumerate(input.split()):
+    if word == giveWord(all_english_words,word):
+      encoder_input_data[i, t,  giveValues(all_english_words,word)] = 1
+  for t,word in enumerate(target.split()):
+    if word == giveWord(all_arabic_words,word):
+      decoder_input_data[i, t,  giveValues(all_arabic_words,word)] = 1
+    if t > 0:
+        # decoder_target_data will be ahead by one timestep
+        # and will not include the start character.
+      if word == giveWord(all_arabic_words,word):
+        decoder_target_data[i, t-1,  giveValues(all_arabic_words,word)] = 1
+print(target_texts)
+print(all_arabic_words)
+print(all_arabic_words[10])
+print(decoder_input_data)
+encoder_inputs = Input(shape=(max_encoder_seq_length,))#max_encoder_seq_length, num_encoder_tokens
+print(encoder_inputs)
+enc_emb =  Embedding(num_encoder_tokens, latent_dim, input_length=max_encoder_seq_length)(encoder_inputs)
+print(enc_emb)
+encoder_lstm = LSTM(latent_dim, return_state=True,return_sequences=False)
+print(encoder_lstm)
+#encoder_lstm  = RepeatVector(max_encoder_seq_length)(encoder_lstm)
+encoder_outputs, state_h, state_c = encoder_lstm(enc_emb)
+print(encoder_outputs)
+# We discard `encoder_outputs` and only keep the states.
+encoder_states = [state_h, state_c]
+decoder_inputs = Input(shape=(max_decoder_seq_length,))#max_decoder_seq_length, num_decoder_tokens
+dec_emb =  Embedding(num_decoder_tokens, latent_dim)(decoder_inputs)
+decoder_lstm = LSTM(latent_dim, return_sequences=True, return_state=True)#expmle colab1
+decoder_outputs, _, _ = decoder_lstm(dec_emb, initial_state=encoder_states)
+
+decoder_dense = Dense(num_decoder_tokens, activation='softmax')
+decoder_outputs = decoder_dense(decoder_outputs)
+model = Model(inputs=[encoder_inputs, decoder_inputs], outputs=decoder_outputs)
+# -----------------------------compile the model 
+model.compile(optimizer='rmsprop', loss='categorical_crossentropy' , metrics=['accuracy'])
+model.summary()
+# -----------------------------fit the model
+from keras.utils.vis_utils import plot_model
+plot_model(model, show_shapes=True)
+
+#history = model.fit([encoder_input_data, decoder_input_data], decoder_target_data,
+ #         batch_size=batch_size,
+  #        epochs=epochs,
+   #       validation_split=0.2)
+# Encode the input sequence to get the "thought vectors"==>C? H? 
+encoder_model = Model(encoder_inputs, encoder_states)
+# Decoder setup
+# Below tensors will hold the states of the previous time step
+decoder_state_input_h = Input(shape=(None,))
+decoder_state_input_c = Input(shape=(None,))
+decoder_states_inputs = [decoder_state_input_h, decoder_state_input_c]
+
+
+#decoder_outputs, state_h, state_c = decoder_lstm(decoder_inputs, initial_state=decoder_states_inputs)
+#decoder_states = [state_h, state_c]
+#decoder_outputs = decoder_dense(decoder_outputs)# A dense softmax layer to generate prob dist. over the target vocabulary
+
+#dec_emb2= dec_emb(decoder_inputs) # Get the embeddings of the decoder sequence
+
+# To predict the next word in the sequence, set the initial states to the states from the previous time step
+decoder_outputs2, state_h2, state_c2 = decoder_lstm(dec_emb, initial_state=decoder_states_inputs)
+decoder_states2 = [state_h2, state_c2]
+decoder_outputs2 = decoder_dense(decoder_outputs2)
+decoder_model = Model(
+  [decoder_inputs] + decoder_states_inputs,
+  [decoder_outputs] + decoder_states)
+def decode_sequence(input_seq):
+  # encode the input sequence to get the internal state vectors.......تشفير تسلسل الإدخال للحصول على متجهات الحالة الداخلية
+  states_value = encoder_model.predict(input_seq)
+  
+  # generate empty target sequence of length 1 with only the start character
+  target_seq = np.zeros((1, 1, num_decoder_tokens))
+  target_seq[0, 0, giveValues(input_characters,'S')] = 1.  #[[[0. 0. 0. 0. 1. 0. 0. 0. 0. 0. 0. 0.]]]
+  # output sequence loop
+  stop_condition = False
+  decoded_sentence = ''
+  while not stop_condition:
+    output_tokens, h, c = decoder_model.predict(
+      [target_seq] + states_value)
+    
+    # sample a token and add the corresponding character to the 
+    # decoded sequence
+    sampled_token_index = np.argmax(output_tokens[0, -1, :])
+    sampled_char = giveC(target_characters,sampled_token_index) 
+    #sampled_char = reverse_target_char_index[sampled_token_index]
+    decoded_sentence += sampled_char
+    
+    # check for the exit condition: either hitting max length
+    # or predicting the 'stop' character
+    if (sampled_char == 'E' or 
+        len(decoded_sentence) > max_decoder_seq_length):
+      stop_condition = True
+      
+    # update the target sequence (length 1).
+    target_seq = np.zeros((1, 1, num_decoder_tokens))
+    target_seq[0, 0, sampled_token_index] = 1.
+    
+    # update states
+    states_value = [h, c]
+    
+  return decoded_sentence
+i = np.random.choice(len(input_texts))
+input_seq = encoder_input_data[i:i+1]
+translation = decode_sequence(input_seq)
+print('-')
+print('Input:', input_texts[i])
+print('Translation:', translation)
